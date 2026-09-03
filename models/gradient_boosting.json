@@ -1,0 +1,19 @@
+{
+  "run_name": "gradient_boosting",
+  "model_type": "GradientBoostingClassifier",
+  "features": [
+    "sg_putt",
+    "sg_arg",
+    "sg_app",
+    "sg_ott"
+  ],
+  "test_metrics": {
+    "accuracy": 0.8089063299778195,
+    "precision": 0.8266938063390521,
+    "recall": 0.8443718443718444,
+    "f1": 0.8354393182486042,
+    "roc_auc": 0.8934918708375004
+  },
+  "git_commit": "46bc1039642c4d3ddf22b854bf67a4385f81c05c",
+  "exported_at": "2026-09-03T14:35:24.158221+00:00"
+}
