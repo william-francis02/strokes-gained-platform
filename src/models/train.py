@@ -1,11 +1,19 @@
-"""Model comparison for the made_cut classifier: logistic regression baseline,
-random forest, and gradient boosting.
+"""Two independent model comparisons, sharing the same split strategy and
+feature set but nothing else:
 
-Trains against data/processed/tournament_classification.csv, using a
-time-based, tournament-grouped split (see src/models/split.py) so no
-tournament appears in both train and test. Every model sees the identical
-split and features, so the runs are directly comparable. Logs one MLflow run
-per model to the same experiment (local file-based tracking under ./mlruns).
+- made_cut classifier (run()): logistic regression, random forest, gradient
+  boosting against data/processed/tournament_classification.csv. Logs to
+  the "made_cut_baseline" MLflow experiment.
+- finish_position regression baseline (run_regression()): linear
+  regression, random forest, gradient boosting against
+  data/processed/tournament_regression.csv. Logs to the separate
+  "finish_position_baseline" MLflow experiment — see data/README.md for
+  this dataset's made-cut-only bias, also tagged on every regression run.
+
+Both use the same time-based, tournament-grouped split (see
+src/models/split.py) so no tournament appears in both train and test, and
+every model within a comparison sees the identical split and features so
+the runs are directly comparable.
 """
 
 import json
@@ -24,17 +32,20 @@ import mlflow
 import mlflow.sklearn
 import pandas as pd
 from scipy.stats import spearmanr
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.inspection import permutation_importance
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.metrics import (
     ConfusionMatrixDisplay,
     accuracy_score,
     confusion_matrix,
     f1_score,
+    mean_absolute_error,
     precision_score,
+    r2_score,
     recall_score,
     roc_auc_score,
+    root_mean_squared_error,
 )
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -44,11 +55,11 @@ from src.models.split import time_based_group_split
 # XGBoost is optional: fall back to sklearn's gradient boosting when it is not
 # installed, so the third run is always trained either way.
 try:
-    from xgboost import XGBClassifier
+    from xgboost import XGBClassifier, XGBRegressor
 
     HAS_XGBOOST = True
 except ImportError:
-    from sklearn.ensemble import GradientBoostingClassifier
+    from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
 
     HAS_XGBOOST = False
 
@@ -56,6 +67,11 @@ DATA_PATH = Path("data/processed/tournament_classification.csv")
 FEATURE_COLUMNS = ["sg_putt", "sg_arg", "sg_app", "sg_ott"]
 TARGET_COLUMN = "made_cut"
 EXPERIMENT_NAME = "made_cut_baseline"
+# finish_position baseline: a separate dataset, target, and MLflow experiment
+# from the made_cut classifier above — see run_regression().
+REGRESSION_DATA_PATH = Path("data/processed/tournament_regression.csv")
+REGRESSION_TARGET_COLUMN = "finish_position"
+REGRESSION_EXPERIMENT_NAME = "finish_position_baseline"
 RANDOM_STATE = 42
 TEST_FRAC = 0.2
 # Hyperparameters logged per run, when the estimator has them.
@@ -131,6 +147,36 @@ def build_models(random_state: int = RANDOM_STATE) -> list[tuple[str, str, objec
     ]
 
 
+def build_regression_models(random_state: int = RANDOM_STATE) -> list[tuple[str, str, object]]:
+    """The models compared for the finish_position baseline, same shape as build_models()."""
+    if HAS_XGBOOST:
+        boosting_name = "xgboost"
+        boosting = XGBRegressor(
+            n_estimators=300,
+            learning_rate=0.1,
+            max_depth=5,
+            random_state=random_state,
+        )
+    else:
+        boosting_name = "gradient_boosting"
+        boosting = GradientBoostingRegressor(
+            n_estimators=300,
+            learning_rate=0.1,
+            max_depth=3,
+            random_state=random_state,
+        )
+
+    return [
+        ("linear_regression", "LinearRegression", LinearRegression()),
+        (
+            "random_forest",
+            "RandomForestRegressor",
+            RandomForestRegressor(n_estimators=300, random_state=random_state, n_jobs=-1),
+        ),
+        (boosting_name, type(boosting).__name__, boosting),
+    ]
+
+
 def evaluate(y_true: pd.Series, y_pred, y_proba) -> dict:
     """Compute standard classification metrics."""
     return {
@@ -148,12 +194,43 @@ def majority_class_baseline_accuracy(y_train: pd.Series, y_eval: pd.Series) -> f
     return (y_eval == majority_class).mean()
 
 
+def evaluate_regression(y_true, y_pred) -> dict:
+    """Compute standard regression metrics."""
+    return {
+        "mae": mean_absolute_error(y_true, y_pred),
+        "rmse": root_mean_squared_error(y_true, y_pred),
+        "r2": r2_score(y_true, y_pred),
+    }
+
+
+def baseline_mae(y_train: pd.Series, y_eval: pd.Series) -> float:
+    """MAE of always predicting the train set's median (MAE-optimal constant)."""
+    median = y_train.median()
+    return mean_absolute_error(y_eval, [median] * len(y_eval))
+
+
 def plot_confusion_matrix(y_true, y_pred, out_path: Path) -> Path:
     """Save a confusion matrix plot for the test set predictions."""
     cm = confusion_matrix(y_true, y_pred)
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["missed cut", "made cut"])
     fig, ax = plt.subplots(figsize=(5, 5))
     disp.plot(ax=ax, colorbar=False)
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+    return out_path
+
+
+def plot_predicted_vs_actual(y_true, y_pred, out_path: Path) -> Path:
+    """Save a predicted-vs-actual scatter for the test set, with a y=x reference line."""
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.scatter(y_true, y_pred, alpha=0.3, s=12, color="#4C72B0")
+    lo = min(min(y_true), min(y_pred))
+    hi = max(max(y_true), max(y_pred))
+    ax.plot([lo, hi], [lo, hi], color="gray", linestyle="--", linewidth=1)
+    ax.set_xlabel("actual finish position")
+    ax.set_ylabel("predicted finish position")
+    ax.set_title("Predicted vs. actual finish position (test set)")
     fig.tight_layout()
     fig.savefig(out_path)
     plt.close(fig)
@@ -295,23 +372,32 @@ def export_if_better(
     commit: str | None,
     out_dir: Path = MODELS_DIR,
     metric_key: str = EXPORT_METRIC_KEY,
+    higher_is_better: bool = True,
+    export_name: str | None = None,
+    data_bias_note: str | None = None,
 ) -> bool:
     """Persist the fitted pipeline to disk if it beats the last exported run.
 
-    Writes <run_name>.joblib plus a <run_name>.json sidecar recording the
-    metric this comparison used, so a rerun of this script can never clobber
-    a better model with a worse one. Both files are written to a temp path
-    and moved into place with os.replace, so a crash mid-write can't leave a
-    corrupt or mismatched pair on disk.
+    Writes <export_name or run_name>.joblib plus a matching .json sidecar
+    recording the metric this comparison used, so a rerun of this script can
+    never clobber a better model with a worse one. Both files are written to
+    a temp path and moved into place with os.replace, so a crash mid-write
+    can't leave a corrupt or mismatched pair on disk.
+
+    export_name lets a caller decouple the exported filename from the MLflow
+    run name — needed because both the classifier and the regressor name
+    their boosting run "gradient_boosting", which would otherwise collide.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    model_path = out_dir / f"{run_name}.joblib"
-    meta_path = out_dir / f"{run_name}.json"
+    export_name = export_name or run_name
+    model_path = out_dir / f"{export_name}.joblib"
+    meta_path = out_dir / f"{export_name}.json"
 
     new_score = test_metrics[metric_key]
     if meta_path.exists():
         previous_score = json.loads(meta_path.read_text())["test_metrics"][metric_key]
-        if new_score <= previous_score:
+        is_better = new_score > previous_score if higher_is_better else new_score < previous_score
+        if not is_better:
             print(
                 f"Not exporting {run_name}: test_{metric_key}={new_score:.4f} "
                 f"does not beat existing export ({previous_score:.4f})"
@@ -326,6 +412,8 @@ def export_if_better(
         "git_commit": commit,
         "exported_at": datetime.now(timezone.utc).isoformat(),
     }
+    if data_bias_note:
+        metadata["data_bias_note"] = data_bias_note
 
     fd, tmp_model_path = tempfile.mkstemp(dir=out_dir, suffix=".joblib.tmp")
     os.close(fd)
@@ -424,6 +512,91 @@ def train_and_log(
     return test_metrics
 
 
+def train_and_log_regression(
+    run_name: str,
+    model_type: str,
+    estimator,
+    X_train,
+    y_train,
+    X_test,
+    y_test,
+    split_params: dict,
+    data_rows: int,
+    bias_note: str,
+) -> dict:
+    """Fit one regression model on the shared split and log it as a single MLflow run."""
+    pipeline = build_pipeline(estimator)
+    pipeline.fit(X_train, y_train)
+
+    train_metrics = evaluate_regression(y_train, pipeline.predict(X_train))
+    test_pred = pipeline.predict(X_test)
+    test_metrics = evaluate_regression(y_test, test_pred)
+    baseline = baseline_mae(y_train, y_test)
+
+    print(f"Train metrics: {train_metrics}")
+    print(f"Test metrics:  {test_metrics}")
+    print(
+        f"  MAE  {test_metrics['mae']:.2f}  -> predictions are off by "
+        f"~{test_metrics['mae']:.1f} finishing positions on average"
+    )
+    print(
+        f"  RMSE {test_metrics['rmse']:.2f}  -> like MAE, but weights large misses "
+        "more heavily than small ones"
+    )
+    print(
+        f"  R^2  {test_metrics['r2']:.3f} -> model explains ~{test_metrics['r2']:.0%} of the "
+        "variance in finish position, vs. always predicting the training-set average"
+    )
+    print(f"Median-prediction baseline MAE (test): {baseline:.2f}")
+
+    with mlflow.start_run(run_name=run_name):
+        mlflow.log_params(
+            {
+                "model_type": model_type,
+                "features": FEATURE_COLUMNS,
+                **split_params,
+                **model_hyperparams(estimator),
+            }
+        )
+        mlflow.log_metrics({f"train_{k}": v for k, v in train_metrics.items()})
+        mlflow.log_metrics({f"test_{k}": v for k, v in test_metrics.items()})
+        mlflow.log_metric("median_baseline_mae", baseline)
+
+        commit = get_git_commit()
+        if commit:
+            mlflow.set_tag("git_commit", commit)
+        mlflow.set_tag("data_rows", data_rows)
+        mlflow.set_tag("data_bias_note", bias_note)
+
+        plot_path = Path("predicted_vs_actual.png")
+        plot_predicted_vs_actual(y_test, test_pred, plot_path)
+        mlflow.log_artifact(str(plot_path))
+        plot_path.unlink()
+
+        if run_name in IMPORTANCE_RUN_NAMES:  # identifies the boosting slot for both tasks
+            export_if_better(
+                pipeline,
+                run_name,
+                model_type,
+                test_metrics,
+                commit,
+                metric_key="mae",
+                higher_is_better=False,
+                export_name=f"finish_position_{run_name}",
+                data_bias_note=bias_note,
+            )
+
+        signature = mlflow.models.infer_signature(X_train, pipeline.predict(X_train))
+        mlflow.sklearn.log_model(
+            pipeline,
+            name="model",
+            signature=signature,
+            input_example=X_train.head(5),
+        )
+
+    return test_metrics
+
+
 def run(data_path: Path = DATA_PATH, test_frac: float = TEST_FRAC) -> dict[str, dict]:
     """Split once, then train and log every model against that same split.
 
@@ -487,5 +660,86 @@ def run(data_path: Path = DATA_PATH, test_frac: float = TEST_FRAC) -> dict[str, 
     return results
 
 
+def run_regression(
+    data_path: Path = REGRESSION_DATA_PATH, test_frac: float = TEST_FRAC
+) -> dict[str, dict]:
+    """Split once, then train and log every regression model against that same split.
+
+    Fully separate from run(): own dataset, own target, own MLflow experiment
+    (REGRESSION_EXPERIMENT_NAME, never EXPERIMENT_NAME). Returns test metrics
+    keyed by run name.
+    """
+    df = load_data(data_path)
+    print(f"Loaded {len(df)} rows, {df['tournament id'].nunique()} tournaments")
+
+    made_cut_share = df["made_cut"].mean()
+    bias_note = (
+        f"tournament_regression.csv only contains rows with a recorded finish "
+        f"position ({made_cut_share:.1%} made the cut) — this model predicts "
+        "finishing position given a recorded finish, not who makes the cut."
+    )
+    print(f"Data bias: {bias_note}")
+
+    train_df, test_df = time_based_group_split(df, test_frac=test_frac)
+    overlap = set(train_df["tournament id"]) & set(test_df["tournament id"])
+    assert not overlap, f"train/test tournament overlap: {overlap}"
+    print(
+        f"Confirmed: 0 tournament ids overlap between train "
+        f"({train_df['tournament id'].nunique()} tournaments) and test "
+        f"({test_df['tournament id'].nunique()} tournaments)"
+    )
+    print(
+        f"Train: {len(train_df)} rows, {train_df['tournament id'].nunique()} tournaments "
+        f"({train_df['date'].min().date()} to {train_df['date'].max().date()})"
+    )
+    print(
+        f"Test:  {len(test_df)} rows, {test_df['tournament id'].nunique()} tournaments "
+        f"({test_df['date'].min().date()} to {test_df['date'].max().date()})"
+    )
+
+    X_train, y_train = train_df[FEATURE_COLUMNS], train_df[REGRESSION_TARGET_COLUMN]
+    X_test, y_test = test_df[FEATURE_COLUMNS], test_df[REGRESSION_TARGET_COLUMN]
+
+    split_params = {
+        "test_frac": test_frac,
+        "split_strategy": "time_based_group",
+        "random_state": RANDOM_STATE,
+        "train_tournaments": train_df["tournament id"].nunique(),
+        "test_tournaments": test_df["tournament id"].nunique(),
+        "train_rows": len(train_df),
+        "test_rows": len(test_df),
+    }
+
+    models = build_regression_models()
+    mlflow.set_experiment(REGRESSION_EXPERIMENT_NAME)
+
+    results = {}
+    for i, (run_name, model_type, estimator) in enumerate(models, start=1):
+        print(f"\n[{i}/{len(models)}] {run_name} ({model_type})")
+        results[run_name] = train_and_log_regression(
+            run_name,
+            model_type,
+            estimator,
+            X_train,
+            y_train,
+            X_test,
+            y_test,
+            split_params,
+            len(df),
+            bias_note,
+        )
+
+    print(
+        f"\nTest-set comparison ({len(models)} runs in experiment "
+        f"'{REGRESSION_EXPERIMENT_NAME}'), lower MAE/RMSE is better:"
+    )
+    print(f"{'run':<22}{'mae':>10}{'rmse':>10}{'r2':>10}")
+    for run_name, metrics in sorted(results.items(), key=lambda item: item[1]["mae"]):
+        print(f"{run_name:<22}{metrics['mae']:>10.4f}{metrics['rmse']:>10.4f}{metrics['r2']:>10.4f}")
+
+    return results
+
+
 if __name__ == "__main__":
     run()
+    run_regression()

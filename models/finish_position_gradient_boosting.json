@@ -1,0 +1,18 @@
+{
+  "run_name": "gradient_boosting",
+  "model_type": "GradientBoostingRegressor",
+  "features": [
+    "sg_putt",
+    "sg_arg",
+    "sg_app",
+    "sg_ott"
+  ],
+  "test_metrics": {
+    "mae": 6.3726552163143495,
+    "rmse": 9.039519913583876,
+    "r2": 0.8136239075132603
+  },
+  "git_commit": "d837f6d665f12f341ccf7cd6430ef96d0b9700fa",
+  "exported_at": "2026-09-04T11:37:27.946666+00:00",
+  "data_bias_note": "tournament_regression.csv only contains rows with a recorded finish position (98.2% made the cut) \u2014 this model predicts finishing position given a recorded finish, not who makes the cut."
+}
