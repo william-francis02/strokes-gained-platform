@@ -221,3 +221,6 @@ __marimo__/
 mlruns/
 mlartifacts/
 
+# Personal prep notes, not project documentation
+docs/mentor-feedback-presentation-prep.md
+

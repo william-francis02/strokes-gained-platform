@@ -134,30 +134,122 @@ div[data-testid="stButton"] button:hover {
     color: var(--fairway-green-dark);
 }
 
-/* Comparison table */
-.comparison-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.92rem;
+/* Bento-grid model comparison cards, and the feature-importance "top
+   predictor" callout (same classes, reused so both sections read as one
+   visual system). Winner/callout card spans the full row via grid-column:
+   1 / -1; the rest auto-fit into a row beneath it. */
+.bento-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+    margin: 0.5rem 0 1rem 0;
 }
-.comparison-table th {
-    text-align: left;
-    font-size: 1rem;
+.bento-card {
+    background-color: #FFFFFF;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+    padding: 18px 20px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    position: relative;
+}
+.bento-card.winner {
+    grid-column: 1 / -1;
+    background: linear-gradient(145deg, var(--fairway-green) 0%, var(--fairway-green-dark) 100%);
+    border: none;
+    padding: 26px 30px;
+}
+.bento-winner-badge {
+    display: inline-block;
+    background-color: var(--sand);
+    color: var(--fairway-green-dark);
+    font-size: 0.7rem;
     font-weight: 700;
-    padding: 0.5rem 0.75rem;
-    border-bottom: 3px solid var(--sand);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border-radius: 100px;
+    padding: 3px 12px;
+    margin-bottom: 10px;
+    width: fit-content;
+}
+.bento-model-name {
+    font-size: 1.05rem;
+    font-weight: 700;
     color: var(--fairway-green-dark);
 }
-.comparison-table th.num, .comparison-table td.num {
-    text-align: right;
+.bento-card.winner .bento-model-name {
+    color: #FFFFFF;
+    font-size: 1.3rem;
+}
+.bento-model-type {
+    font-size: 0.75rem;
+    color: #6b6b63;
+    margin-bottom: 6px;
+}
+.bento-card.winner .bento-model-type {
+    color: rgba(255, 255, 255, 0.75);
+}
+.bento-headline {
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    color: var(--fairway-green-dark);
+    font-size: 2rem;
+    margin: 4px 0 2px 0;
     font-variant-numeric: tabular-nums;
 }
-.comparison-table td {
-    padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid var(--border);
+.bento-card.winner .bento-headline {
+    color: var(--sand);
+    font-size: 3.4rem;
 }
-.comparison-table tr.winner-row {
-    background-color: rgba(45, 106, 79, 0.08); /* #2D6A4F @ 8% */
+.bento-headline-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #6b6b63;
+    margin-bottom: 10px;
+}
+.bento-card.winner .bento-headline-label {
+    color: rgba(255, 255, 255, 0.75);
+}
+.bento-supporting {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+}
+.bento-supporting-item {
+    font-size: 0.78rem;
+    color: #6b6b63;
+}
+.bento-supporting-item .val {
+    font-weight: 700;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+}
+.bento-card.winner .bento-supporting-item {
+    color: rgba(255, 255, 255, 0.75);
+}
+.bento-card.winner .bento-supporting-item .val {
+    color: #FFFFFF;
+}
+.bento-started {
+    font-size: 0.7rem;
+    color: #9a9a90;
+    margin-top: 10px;
+}
+.bento-card.winner .bento-started {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+/* Gradient accent rule above the feature-importance chart, echoing the
+   bento hero-card top border without touching the chart itself. */
+.importance-accent {
+    height: 4px;
+    background: linear-gradient(90deg, var(--fairway-green), var(--sand), var(--fairway-green));
+    border-radius: 2px;
+    margin: 6px 0 18px 0;
 }
 
 /* Prediction result cards (made/missed badge, and the numeric variant) */
@@ -275,13 +367,22 @@ def latest_per_run_name(
     return latest.sort_values(sort_metric, ascending=ascending)
 
 
-def render_comparison_table(latest_df: pd.DataFrame, metric_columns: list[str]) -> None:
+def render_comparison_table(
+    latest_df: pd.DataFrame, metric_columns: list[str], primary_metric: str
+) -> None:
+    """Render each model as a bento card; the winner (best primary_metric,
+    since latest_df is already sorted best-first — see latest_per_run_name)
+    spans the full row with a large headline number, the rest sit smaller
+    below it. primary_metric must be one of metric_columns.
+    """
     st.header("Model comparison")
     st.markdown(
         '<p class="section-subtitle">Three different prediction approaches were '
         "tested — this shows how each performed.</p>",
         unsafe_allow_html=True,
     )
+
+    supporting_columns = [metric for metric in metric_columns if metric != primary_metric]
 
     display_df = pd.DataFrame(
         {
@@ -294,27 +395,39 @@ def render_comparison_table(latest_df: pd.DataFrame, metric_columns: list[str]) 
         }
     )
 
-    numeric_cols = set(metric_columns)
     winner_run = display_df.iloc[0]["run"] if not display_df.empty else None
 
-    header_cells = "".join(
-        f'<th class="num">{col}</th>' if col in numeric_cols else f"<th>{col}</th>"
-        for col in display_df.columns
-    )
-    body_rows = []
+    # display_df is already best-first (latest_df's sort order), so the
+    # winner card — grid-column: 1 / -1 in CSS — lands first in the grid
+    # and takes the full-width top row; the rest auto-fit beneath it.
+    #
+    # Built as single-line HTML (no embedded newlines): a blank-ish line
+    # here — e.g. from an empty badge_html on a non-winner card — reads to
+    # Streamlit's markdown renderer as a blank line inside a raw HTML
+    # block, which ends the block early and dumps everything after it as
+    # literal indented-code text instead of rendering it.
+    cards_html = []
     for _, row in display_df.iterrows():
-        row_class = "winner-row" if row["run"] == winner_run else ""
-        cells = "".join(
-            f'<td class="num">{row[col]}</td>' if col in numeric_cols else f"<td>{row[col]}</td>"
-            for col in display_df.columns
+        is_winner = row["run"] == winner_run
+        badge_html = '<div class="bento-winner-badge">Top performer</div>' if is_winner else ""
+        supporting_html = "".join(
+            f'<span class="bento-supporting-item">{metric} '
+            f'<span class="val">{row[metric]}</span></span>'
+            for metric in supporting_columns
         )
-        body_rows.append(f'<tr class="{row_class}">{cells}</tr>')
+        cards_html.append(
+            f'<div class="bento-card{" winner" if is_winner else ""}">'
+            f"{badge_html}"
+            f'<div class="bento-model-name">{row["run"]}</div>'
+            f'<div class="bento-model-type">{row["model_type"]}</div>'
+            f'<div class="bento-headline">{row[primary_metric]}</div>'
+            f'<div class="bento-headline-label">{primary_metric}</div>'
+            f'<div class="bento-supporting">{supporting_html}</div>'
+            f'<div class="bento-started">Run {row["started"]}</div>'
+            f"</div>"
+        )
 
-    table_html = (
-        f'<table class="comparison-table"><thead><tr>{header_cells}</tr></thead>'
-        f'<tbody>{"".join(body_rows)}</tbody></table>'
-    )
-    st.markdown(table_html, unsafe_allow_html=True)
+    st.markdown(f'<div class="bento-grid">{"".join(cards_html)}</div>', unsafe_allow_html=True)
 
 
 def render_feature_importance(latest_df: pd.DataFrame) -> None:
@@ -339,6 +452,30 @@ def render_feature_importance(latest_df: pd.DataFrame) -> None:
     feature_labels = [FEATURE_LABELS[f] for f in FEATURE_COLUMNS]
 
     st.caption(f"From the latest '{run['tags.mlflow.runName']}' run")
+
+    # Bento callout for the top-ranked feature (by permutation importance,
+    # the test-set measure) — the bar chart below still carries the full,
+    # precise comparison across both importance measures; this just answers
+    # "which one matters most" at a glance, reusing Part 1's card classes so
+    # the two sections read as one visual system.
+    top_idx = int(np.argmax(perm_vals))
+    st.markdown(
+        f'<div class="bento-grid">'
+        f'<div class="bento-card winner">'
+        f'<div class="bento-winner-badge">Top predictor</div>'
+        f'<div class="bento-model-name">{feature_labels[top_idx]}</div>'
+        f'<div class="bento-model-type">{FEATURE_COLUMNS[top_idx]}</div>'
+        f'<div class="bento-headline">{perm_vals[top_idx]:.3f}</div>'
+        f'<div class="bento-headline-label">permutation importance</div>'
+        f'<div class="bento-supporting">'
+        f'<span class="bento-supporting-item">impurity importance '
+        f'<span class="val">{impurity_vals[top_idx]:.3f}</span></span>'
+        f"</div>"
+        f"</div>"
+        f"</div>"
+        f'<div class="importance-accent"></div>',
+        unsafe_allow_html=True,
+    )
 
     x = np.arange(len(FEATURE_COLUMNS))
     width = 0.35
@@ -641,7 +778,7 @@ def render_made_cut_page() -> None:
     else:
         latest_df = latest_per_run_name(runs_df)
         with st.container(border=True, key="card-comparison-made-cut"):
-            render_comparison_table(latest_df, MADE_CUT_METRIC_COLUMNS)
+            render_comparison_table(latest_df, MADE_CUT_METRIC_COLUMNS, primary_metric="roc_auc")
         with st.container(border=True, key="card-importance"):
             render_feature_importance(latest_df)
 
@@ -668,7 +805,9 @@ def render_finish_position_page() -> None:
             runs_df, sort_metric="metrics.test_mae", ascending=True
         )
         with st.container(border=True, key="card-comparison-finish-position"):
-            render_comparison_table(latest_df, FINISH_POSITION_METRIC_COLUMNS)
+            render_comparison_table(
+                latest_df, FINISH_POSITION_METRIC_COLUMNS, primary_metric="mae"
+            )
 
     with st.container(border=True, key="card-prediction-finish-position"):
         render_finish_position_prediction(FINISH_POSITION_MODEL_PATH)
